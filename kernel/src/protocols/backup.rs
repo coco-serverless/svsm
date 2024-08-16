@@ -24,11 +24,9 @@ const SVSM_ENABLE_COPY_ON_WRITE: u32 = 2;
 // TODO use after implementing partial backup
 //const SVSM_PARTIAL_RESTORE: u32 = 3;
 
-#[repr(packed)]
-#[derive(Copy, Clone)]
-struct MemPage4K {
+struct MemPage4K<'a> {
     phys_addr: PhysAddr,
-    data: [u8; PAGE_SIZE],
+    data: &'a mut [u8; PAGE_SIZE],
 }
 
 pub static PAGES_TO_BACKUP: Set = Set::new();
@@ -36,7 +34,7 @@ pub static PAGES_TO_CLEAR: Set = Set::new();
 
 pub static BACKUP_CREATED: SpinLock<bool> = SpinLock::new(false); 
 
-static BACKUP_PAGES: SpinLock<Vec<&mut MemPage4K>> = SpinLock::new(Vec::new()); 
+static BACKUP_PAGES: SpinLock<Vec<MemPage4K<'_>>> = SpinLock::new(Vec::new()); 
 static ZERO_PAGES: SpinLock<Vec<PhysAddr>> = SpinLock::new(Vec::new());
 
 
@@ -54,9 +52,6 @@ fn create_full_backup() -> Result<(), SvsmReqError> {
         log::info!("Backup already exists. No new backup will be created.");
         return Ok(());
     }
-    PAGES_TO_BACKUP.insert_addr(PhysAddr::from(0x80e000usize), PageSize::Regular); // CPUID Page
-    PAGES_TO_BACKUP.insert_addr(PhysAddr::from(0x80d000usize), PageSize::Regular); // Secrets Page
-    PAGES_TO_BACKUP.insert_addr(PhysAddr::from(0x80f000usize), PageSize::Regular); // CAA Page
 
     log::info!("Starting to backup pages...");
     let mut total_size = 0;
@@ -105,16 +100,16 @@ fn backup_4k_page(paddr: PhysAddr) -> Result<bool, SvsmError> {
     let virt_addr = guard.virt_addr();
     
     let mut backup = false;
-    let page_box_uninit: PageBox<MaybeUninit<MemPage4K>> = PageBox::try_new_uninit()?;
-    let page_box: PageBox<MemPage4K> = unsafe { page_box_uninit.assume_init() };
+    let page_box_uninit: PageBox<MaybeUninit<[u8; PAGE_SIZE]>> = PageBox::try_new_uninit()?;
+    let page_box: PageBox<[u8; PAGE_SIZE]> = unsafe { page_box_uninit.assume_init() };
     let ref_page = PageBox::leak(page_box);
-    ref_page.phys_addr = paddr;
     let mut zero = true;
     for i in 0..(PAGE_SIZE){
-        ref_page.data[i] = read_u8(virt_addr)?;
-        if ref_page.data[i] != 0 {
+        let byte = read_u8(virt_addr+i)?;
+        if byte != 0 {
             zero = false;
         }
+        ref_page[i] = byte;
     }
     if zero {
         let _ = unsafe {PageBox::from_raw(NonNull::from(ref_page))};
@@ -123,7 +118,10 @@ fn backup_4k_page(paddr: PhysAddr) -> Result<bool, SvsmError> {
     }
     else {
         let mut guard = BACKUP_PAGES.lock();
-        guard.push(ref_page);
+        guard.push(MemPage4K {
+            phys_addr: paddr,
+            data: ref_page,
+        });
         backup = true;
     }
     Ok(backup)
@@ -145,6 +143,7 @@ fn restore_pages_from_backup() -> Result<(), SvsmReqError> {
     }
 
     // TODO reset additional pages used by adding them to page to clear
+    // TODO flush TLB?
     log::info!("Zeroing new pages...");
     for (_paddr, _size) in PAGES_TO_CLEAR.iter_addresses() {
         // TODO
@@ -154,7 +153,7 @@ fn restore_pages_from_backup() -> Result<(), SvsmReqError> {
     Ok(())
 }
 
-fn restore_page(page_src: &MemPage4K) -> Result<(), SvsmError> {
+fn restore_page(page_src: &MemPage4K<'_>) -> Result<(), SvsmError> {
     let paddr_dest = page_src.phys_addr;
     if !writable_phys_addr(paddr_dest) {
         log::info!("Skipping page {:#x}", paddr_dest);
@@ -162,11 +161,8 @@ fn restore_page(page_src: &MemPage4K) -> Result<(), SvsmError> {
     }
     let guard_cpu = PerCPUPageMappingGuard::create(paddr_dest, paddr_dest+PAGE_SIZE, VIRT_ALIGN_4K)?;
     let virt_addr = guard_cpu.virt_addr();
-    for i in 0..(PAGE_SIZE){
-        let data = page_src.data[i];
-        unsafe {
-            virt_addr.as_mut_ptr::<u8>().add(i).write(data);
-        }
+    unsafe {
+        virt_addr.as_mut_ptr::<[u8; PAGE_SIZE]>().write( *page_src.data);
     }
     log::info!("Restored page {:#x}", paddr_dest);
     Ok(())
