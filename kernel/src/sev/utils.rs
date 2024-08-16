@@ -119,7 +119,9 @@ pub fn pvalidate(vaddr: VirtAddr, size: PageSize, valid: PvalidateOp) -> Result<
     }
 
     let changed = cf == 0;
-
+    if valid == PvalidateOp::Invalid {
+        log::info!("Make invalid {:#x}", rax);
+    }
     match ret {
         0 if changed => Ok(()),
         0 if !changed => Err(SevSnpError::FAIL_UNCHANGED(0x10).into()),
@@ -184,6 +186,7 @@ bitflags::bitflags! {
         const BIT_VMSA = 1u64 << 16;
         const NONE = 0;
         const RWX = Self::READ.bits() | Self::WRITE.bits() | Self::X_USER.bits() | Self::X_SUPER.bits();
+        const RX = Self::READ.bits() | Self::X_USER.bits() | Self::X_SUPER.bits();
         const VMSA = Self::READ.bits() | Self::BIT_VMSA.bits();
     }
 }
@@ -234,6 +237,24 @@ pub fn rmp_revoke_guest_access(vaddr: VirtAddr, size: PageSize) -> Result<(), Sv
     for vmpl in RMPFlags::GUEST_VMPL.bits()..=RMPFlags::VMPL3.bits() {
         let vmpl = RMPFlags::from_bits_truncate(vmpl);
         rmp_adjust(vaddr, vmpl | RMPFlags::NONE, size)?;
+    }
+    Ok(())
+}
+
+pub fn rmp_set_read_only(vaddr: VirtAddr, size: PageSize) -> Result<(), SvsmError> {
+    // guest has access to all VMPL levels >= guest VMPL 
+    for vmpl in RMPFlags::GUEST_VMPL.bits()..=RMPFlags::VMPL3.bits() {
+        let vmpl = RMPFlags::from_bits_truncate(vmpl);
+        rmp_adjust(vaddr, vmpl | RMPFlags::RX, size)?;
+    }
+    Ok(())
+}
+
+pub fn rmp_set_read_write(vaddr: VirtAddr, size: PageSize) -> Result<(), SvsmError> {
+    // guest has access to all VMPL levels >= guest VMPL 
+    for vmpl in RMPFlags::GUEST_VMPL.bits()..=RMPFlags::VMPL3.bits() {
+        let vmpl = RMPFlags::from_bits_truncate(vmpl);
+        rmp_adjust(vaddr, vmpl | RMPFlags::RWX, size)?;
     }
     Ok(())
 }

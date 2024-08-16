@@ -17,6 +17,7 @@ pub mod stack;
 pub mod validate;
 pub mod virtualrange;
 pub mod vm;
+pub mod set;
 
 pub use address_space::*;
 pub use guestmem::GuestPtr;
@@ -29,3 +30,5 @@ pub use pagetable::PageTablePart;
 pub use alloc::{allocate_file_page, allocate_file_page_ref, PageRef};
 
 pub use mappings::{mmap_kernel, mmap_user, munmap_kernel, munmap_user, VMMappingGuard};
+
+pub use set::Set;
