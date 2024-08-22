@@ -171,6 +171,7 @@ pub fn raw_vmgexit() {
 }
 
 bitflags::bitflags! {
+    #[derive(Clone, Copy)]
     pub struct RMPFlags: u64 {
         const VMPL0 = 0;
         const VMPL1 = 1;
@@ -184,6 +185,7 @@ bitflags::bitflags! {
         const BIT_VMSA = 1u64 << 16;
         const NONE = 0;
         const RWX = Self::READ.bits() | Self::WRITE.bits() | Self::X_USER.bits() | Self::X_SUPER.bits();
+        const RX = Self::READ.bits() | Self::X_USER.bits() | Self::X_SUPER.bits();
         const VMSA = Self::READ.bits() | Self::BIT_VMSA.bits();
     }
 }
@@ -231,9 +233,22 @@ pub fn rmp_adjust(addr: VirtAddr, flags: RMPFlags, size: PageSize) -> Result<(),
 }
 
 pub fn rmp_revoke_guest_access(vaddr: VirtAddr, size: PageSize) -> Result<(), SvsmError> {
+    modify_guest_flags(vaddr, size, RMPFlags::NONE)
+}
+
+pub fn rmp_set_read_only(vaddr: VirtAddr, size: PageSize) -> Result<(), SvsmError> {
+    modify_guest_flags(vaddr, size, RMPFlags::RX)
+}
+
+pub fn rmp_set_read_write(vaddr: VirtAddr, size: PageSize) -> Result<(), SvsmError> {
+    modify_guest_flags(vaddr, size, RMPFlags::RWX)
+}
+
+// Guest has access to all VMPL levels >= guest VMPL 
+fn modify_guest_flags(vaddr: VirtAddr, size: PageSize, flags: RMPFlags) -> Result<(), SvsmError> {
     for vmpl in RMPFlags::GUEST_VMPL.bits()..=RMPFlags::VMPL3.bits() {
         let vmpl = RMPFlags::from_bits_truncate(vmpl);
-        rmp_adjust(vaddr, vmpl | RMPFlags::NONE, size)?;
+        rmp_adjust(vaddr, vmpl | flags, size)?;
     }
     Ok(())
 }

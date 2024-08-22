@@ -5,6 +5,7 @@
 // Author: Carlos López <carlos.lopez@suse.com>
 
 use crate::types::{PAGE_SHIFT, PAGE_SIZE};
+use crate::mm::PAGE_SIZE_2M;
 use core::fmt;
 use core::ops;
 
@@ -53,6 +54,11 @@ pub trait Address:
     #[inline]
     fn page_align(&self) -> Self {
         Self::from(self.bits() & !(PAGE_SIZE - 1))
+    }
+
+    #[inline]
+    fn page_align_2m(&self) -> Self {
+        Self::from(self.bits() & !(PAGE_SIZE_2M - 1))
     }
 
     #[inline]
