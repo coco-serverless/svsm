@@ -247,6 +247,60 @@ fn core_configure_vtom(params: &mut RequestParams) -> Result<(), SvsmReqError> {
     }
 }
 
+fn update_pages_to_backup_invalid(paddr: PhysAddr, size: PageSize) -> Result<(), SvsmReqError> {
+    log::info!("Attemt to remove page from backup: {:#x}, size: {:?}", paddr, size);
+    
+    match size {
+        PageSize::Regular => {
+            if PAGES_TO_BACKUP.contains_addr(paddr, size){
+                PAGES_TO_BACKUP.remove_addr(paddr, PageSize::Regular);
+                log::info!("Removed page from backup: {:#x}, size: {:?}", paddr, size);
+
+            } else if PAGES_TO_BACKUP.contains_addr(paddr.page_align_2m(), PageSize::Huge){
+                
+                // Split huge page into regular pages and add them to set
+                // Then remove the huge page and the regular page specified by paddr from the set
+                log::info!("Splitting page from backup: {:#x}, size: {:?}", paddr.page_align_2m(), size);
+                let base_addr = paddr.page_align_2m();
+                for i in 0..(PAGE_SIZE_2M / PAGE_SIZE){
+                    PAGES_TO_BACKUP.insert_addr(base_addr + (i * PAGE_SIZE), PageSize::Regular);
+                }
+                PAGES_TO_BACKUP.remove_addr(base_addr, PageSize::Huge);
+                PAGES_TO_BACKUP.remove_addr(paddr, PageSize::Regular);
+                log::info!("Removed page from backup: {:#x}", paddr);
+            }
+        },
+        PageSize::Huge => {
+            // Scenario:    1. insert address 0x58000000 with size Huge, 
+            //              2. insert 0x58000000 with size Regular, 
+            //              3. insert 0x58001000 with size Regular, 
+            //                ....
+            //              4. remove 0x58000000 with size Huge 
+            //              --> pages 0x58000000, 0x58001000 ... with size Regular have to be removed too
+            PAGES_TO_BACKUP.remove_addr(paddr, PageSize::Huge);
+            for i in 0..(PAGE_SIZE_2M / PAGE_SIZE){
+                PAGES_TO_BACKUP.remove_addr(paddr + (i * PAGE_SIZE), PageSize::Regular);
+            }
+            log::info!("Removed page from backup {:#x}, size: {:?}", paddr.page_align_2m(), PageSize::Huge);
+        }
+    }
+    Ok(())
+
+}
+
+fn update_pages_to_backup(paddr: PhysAddr, size: PageSize, valid: PvalidateOp) -> Result<(), SvsmReqError> {
+    if *(BACKUP_CREATED.lock()) {
+        // TODO implement
+        return Err(SvsmReqError::unsupported_call());
+    } else {
+        match valid {
+            PvalidateOp::Valid => PAGES_TO_BACKUP.insert_addr(paddr, size),
+            PvalidateOp::Invalid => update_pages_to_backup_invalid(paddr, size)?,
+        };
+    }
+    Ok(())
+}
+
 fn core_pvalidate_one(entry: u64, flush: &mut bool) -> Result<(), SvsmReqError> {
     let (page_size_bytes, valign, size) = match entry & 3 {
         0 => (PAGE_SIZE, VIRT_ALIGN_4K, PageSize::Regular),
@@ -321,49 +375,7 @@ fn core_pvalidate_one(entry: u64, flush: &mut bool) -> Result<(), SvsmReqError> 
         }
         rmp_grant_guest_access(vaddr, size)?;
     }
-    if *(BACKUP_CREATED.lock()) {
-        // TODO implement
-        return Err(SvsmReqError::unsupported_call());
-    } else {
-        match valid {
-            PvalidateOp::Valid => PAGES_TO_BACKUP.insert_addr(paddr, size),
-            PvalidateOp::Invalid => {
-                log::info!("Attemt to remove page from backup: {:#x}, size: {:?}", paddr, size);
-                match size {
-                    PageSize::Regular => {
-                        if PAGES_TO_BACKUP.contains_addr(paddr, size){
-                            PAGES_TO_BACKUP.remove_addr(paddr, PageSize::Regular);
-                            log::info!("Removed page from backup: {:#x}, size: {:?}", paddr, size);
-                        } else if PAGES_TO_BACKUP.contains_addr(paddr.page_align_2m(), PageSize::Huge){
-                            // Split huge page into regular pages and add them to set
-                            // Then remove the huge page and the regular page specified by paddr from the set
-                            log::info!("Splitting page from backup: {:#x}, size: {:?}", paddr.page_align_2m(), size);
-                            let base_addr = paddr.page_align_2m();
-                            for i in 0..(PAGE_SIZE_2M / PAGE_SIZE){
-                                PAGES_TO_BACKUP.insert_addr(base_addr + (i * PAGE_SIZE), PageSize::Regular);
-                            }
-                            PAGES_TO_BACKUP.remove_addr(base_addr, PageSize::Huge);
-                            PAGES_TO_BACKUP.remove_addr(paddr, PageSize::Regular);
-                            log::info!("Removed page from backup: {:#x}", paddr);
-                        }
-                    },
-                    PageSize::Huge => {
-                        // Scenario:    1. insert address 0x58000000 with size Huge, 
-                        //              2. insert 0x58000000 with size Regular, 
-                        //              3. insert 0x58001000 with size Regular, 
-                        //                ....
-                        //              4. remove 0x58000000 with size Huge 
-                        //              --> pages 0x58000000, 0x58001000 ... with size Regular have to be removed too
-                        PAGES_TO_BACKUP.remove_addr(paddr, PageSize::Huge);
-                        for i in 0..(PAGE_SIZE_2M / PAGE_SIZE){
-                            PAGES_TO_BACKUP.remove_addr(paddr + (i * PAGE_SIZE), PageSize::Regular);
-                        }
-                        log::info!("Removed page from backup {:#x}, size: {:?}", paddr.page_align_2m(), PageSize::Huge);
-                    }
-                }
-            }
-        };
-    }
+    update_pages_to_backup(paddr, size, valid)?;
     Ok(())
 }
 

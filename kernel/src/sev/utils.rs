@@ -119,9 +119,7 @@ pub fn pvalidate(vaddr: VirtAddr, size: PageSize, valid: PvalidateOp) -> Result<
     }
 
     let changed = cf == 0;
-    if valid == PvalidateOp::Invalid {
-        log::info!("Make invalid {:#x}", rax);
-    }
+
     match ret {
         0 if changed => Ok(()),
         0 if !changed => Err(SevSnpError::FAIL_UNCHANGED(0x10).into()),
@@ -173,6 +171,7 @@ pub fn raw_vmgexit() {
 }
 
 bitflags::bitflags! {
+    #[derive(Clone, Copy)]
     pub struct RMPFlags: u64 {
         const VMPL0 = 0;
         const VMPL1 = 1;
