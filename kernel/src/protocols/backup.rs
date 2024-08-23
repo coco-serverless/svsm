@@ -4,6 +4,7 @@ use crate::protocols::errors::SvsmReqError;
 use crate::protocols::RequestParams;
 use crate::mm::set::Set;
 use crate::sev::utils::rmp_set_read_only;
+use crate::sev::SevSnpError;
 use crate::types::{PageSize, PAGE_SIZE, PAGE_SIZE_2M};
 use crate::mm::virtualrange::{VIRT_ALIGN_2M, VIRT_ALIGN_4K};
 use crate::mm::PerCPUPageMappingGuard;
@@ -43,7 +44,9 @@ pub fn backup_protocol_request(request: u32, _params: &mut RequestParams) -> Res
         SVSM_FULL_BACKUP => create_full_backup(),
         SVSM_RESTORE => restore_pages_from_backup(),
         SVSM_ENABLE_COPY_ON_WRITE => enable_copy_on_write(),
-        _ => Err(SvsmReqError::unsupported_call()),
+        // TODO delete, for debugging purposes only
+        x => enable_copy_on_write_addr(x),
+        //_ => Err(SvsmReqError::unsupported_call()),
     }
 }
 
@@ -180,6 +183,14 @@ fn zero_page(paddr: PhysAddr) -> Result<(), SvsmError> {
     Ok(())
 }
 
+// TODO delete, for debugging purposes only
+fn enable_copy_on_write_addr(paddr: u32) -> Result<(), SvsmReqError> {
+    let phys_addr = PhysAddr::from((paddr as usize)) + 0x100000000;
+    log::info!("Enable copy-on-write for page {:#x}...", phys_addr);
+    set_read_only(phys_addr, PageSize::Regular)?;
+    Ok(())
+}
+
 fn enable_copy_on_write() -> Result<(), SvsmReqError> {
     log::info!("Starting to enable copy-on-write...");
     for (phys_addr, size) in PAGES_TO_BACKUP.iter_addresses() {
@@ -199,7 +210,22 @@ fn set_read_only(paddr: PhysAddr, size: PageSize) -> Result<(), SvsmError> {
         }
     };
     let virt_addr = guard.virt_addr();
-    rmp_set_read_only(virt_addr, size)?;
+    match rmp_set_read_only(virt_addr, size) {
+        Ok(_) => (),
+        Err(e) => {   
+            if let SvsmError::SevSnp(SevSnpError::FAIL_SIZEMISMATCH(_)) = e {
+                if size == PageSize::Huge{
+                    for i in 0..PAGE_SIZE_2M/PAGE_SIZE {
+                        set_read_only(paddr+i*PAGE_SIZE, PageSize::Regular)?;
+                    }
+                    return Ok(());
+                }
+                
+            } 
+            log::error!("An error occurred while trying to set read-only: {:?}", e);
+            return Err(e);
+        },
+    }
     log::info!("Set read-only for page {:#x}, size {:?}", paddr, size);
     Ok(())
 }
