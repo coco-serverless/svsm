@@ -44,7 +44,9 @@ pub fn backup_protocol_request(request: u32, _params: &mut RequestParams) -> Res
         SVSM_FULL_BACKUP => create_full_backup(),
         SVSM_RESTORE => restore_pages_from_backup(),
         SVSM_ENABLE_COPY_ON_WRITE => enable_copy_on_write(),
-        _ => Err(SvsmReqError::unsupported_call()),
+        // TODO delete, for debugging purposes only
+        x => enable_copy_on_write_addr(x),
+        //_ => Err(SvsmReqError::unsupported_call()),
     }
 }
 
@@ -178,6 +180,14 @@ fn zero_page(paddr: PhysAddr) -> Result<(), SvsmError> {
     let virt_addr = guard_cpu.virt_addr();
     zero_mem_region(virt_addr, virt_addr+PAGE_SIZE);
     log::info!("Zeroed page {:#x}", paddr);
+    Ok(())
+}
+
+// TODO delete, for debugging purposes only
+fn enable_copy_on_write_addr(paddr: u32) -> Result<(), SvsmReqError> {
+    let phys_addr = PhysAddr::from((paddr as usize)) + 0x100000000;
+    log::info!("Enable copy-on-write for page {:#x}...", phys_addr);
+    set_read_only(phys_addr, PageSize::Regular)?;
     Ok(())
 }
 
