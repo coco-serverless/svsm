@@ -4,6 +4,7 @@ use crate::protocols::errors::SvsmReqError;
 use crate::protocols::RequestParams;
 use crate::mm::set::Set;
 use crate::sev::utils::rmp_set_read_only;
+use crate::sev::SevSnpError;
 use crate::types::{PageSize, PAGE_SIZE, PAGE_SIZE_2M};
 use crate::mm::virtualrange::{VIRT_ALIGN_2M, VIRT_ALIGN_4K};
 use crate::mm::PerCPUPageMappingGuard;
@@ -199,7 +200,22 @@ fn set_read_only(paddr: PhysAddr, size: PageSize) -> Result<(), SvsmError> {
         }
     };
     let virt_addr = guard.virt_addr();
-    rmp_set_read_only(virt_addr, size)?;
+    match rmp_set_read_only(virt_addr, size) {
+        Ok(_) => (),
+        Err(e) => {   
+            if let SvsmError::SevSnp(SevSnpError::FAIL_SIZEMISMATCH(_)) = e {
+                if size == PageSize::Huge{
+                    for i in 0..PAGE_SIZE_2M/PAGE_SIZE {
+                        set_read_only(paddr+i*PAGE_SIZE, PageSize::Regular)?;
+                    }
+                    return Ok(());
+                }
+                
+            } 
+            log::error!("An error occurred while trying to set read-only: {:?}", e);
+            return Err(e);
+        },
+    }
     log::info!("Set read-only for page {:#x}, size {:?}", paddr, size);
     Ok(())
 }
